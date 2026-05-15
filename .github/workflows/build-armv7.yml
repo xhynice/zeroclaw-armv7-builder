@@ -1,0 +1,67 @@
+# .github/workflows/build-armv7.yml
+name: Build ZeroClaw armv7
+
+on:
+  schedule:
+    - cron: '0 12 * * 1'       # 每周一中午自动检查
+  workflow_dispatch:             # 也可以手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout builder repo
+        uses: actions/checkout@v4
+
+      - name: Clone upstream ZeroClaw
+        run: |
+          git clone --depth 1 https://github.com/zeroclaw-labs/zeroclaw.git src
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-unknown-linux-gnueabihf
+
+      - name: Install cross-compiler
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+
+      - name: Configure linker
+        run: |
+          mkdir -p src/.cargo
+          cat > src/.cargo/config.toml << 'EOF'
+          [target.armv7-unknown-linux-gnueabihf]
+          linker = "arm-linux-gnueabihf-gcc"
+          EOF
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            src/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: armv7-${{ github.run_number }}
+
+      - name: Build binary
+        working-directory: src
+        run: |
+          cargo build --release --target armv7-unknown-linux-gnueabihf \
+            --no-default-features --features agent-runtime,gateway,schema-export
+
+      - name: Build web dashboard
+        working-directory: src
+        run: |
+          cd web && npm ci && npm run build
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp src/target/armv7-unknown-linux-gnueabihf/release/zeroclaw dist/
+          cp -r src/web/dist dist/web-dist
+          cd dist && tar czf ../zeroclaw-armv7-latest.tar.gz zeroclaw web-dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeroclaw-armv7
+          path: zeroclaw-armv7-latest.tar.gz
