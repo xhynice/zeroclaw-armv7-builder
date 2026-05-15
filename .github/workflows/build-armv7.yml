@@ -105,8 +105,12 @@ jobs:
         env:
           CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
         run: |
-          cargo build --release --locked --target armv7-unknown-linux-gnueabihf \
-            --no-default-features --features agent-runtime,gateway,schema-export
+          # 参考官方 release workflow: armv7 用 --no-default-features 跳过 prometheus
+          # 官方: agent-runtime,schema-export,channel-matrix,channel-lark,whatsapp-web
+          # 我们额外加 gateway (WebUI)
+          cargo build --release --locked --no-default-features \
+            --features "agent-runtime,gateway,schema-export" \
+            --target armv7-unknown-linux-gnueabihf
 
       - name: Package
         run: |
