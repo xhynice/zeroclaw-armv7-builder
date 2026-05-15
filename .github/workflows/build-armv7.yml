@@ -264,7 +264,7 @@ jobs:
           cp -r src/web/dist dist/web-dist
 
           if [ "${{ steps.commits.outputs.has_commits }}" = "true" ]; then
-            cp "CHANGELOG-EN-${TODAY}.md" "CHANGELOG-ZH-${TODAY}.md" dist/
+            cp "src/CHANGELOG-EN-${TODAY}.md" "src/CHANGELOG-ZH-${TODAY}.md" dist/
           fi
 
           cd dist && tar czf ../zeroclaw-armv7-latest.tar.gz .
