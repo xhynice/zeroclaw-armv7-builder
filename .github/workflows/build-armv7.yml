@@ -13,8 +13,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Clone upstream ZeroClaw
-        run: |
-          git clone --depth 1 https://github.com/zeroclaw-labs/zeroclaw.git src
+        run: git clone --depth 1 https://github.com/zeroclaw-labs/zeroclaw.git src
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -26,13 +25,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
 
-      - name: Configure linker
+      - name: Configure linker and cross-compile env
         run: |
           mkdir -p src/.cargo
           cat > src/.cargo/config.toml << 'EOF'
           [target.armv7-unknown-linux-gnueabihf]
           linker = "arm-linux-gnueabihf-gcc"
           EOF
+          # 修正：去掉 heredoc 带来的多余缩进
+          sed -i 's/^          //' src/.cargo/config.toml
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -50,14 +51,17 @@ jobs:
 
       - name: Build binary
         working-directory: src
+        env:
+          CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
+          CXX_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-g++
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
         run: |
           cargo build --release --target armv7-unknown-linux-gnueabihf \
             --no-default-features --features agent-runtime,gateway,schema-export
 
       - name: Build web dashboard
-        working-directory: src
+        working-directory: src/web
         run: |
-          cd web
           npm ci
           npm run build
 
