@@ -1,10 +1,9 @@
-# .github/workflows/build-armv7.yml
 name: Build ZeroClaw armv7
 
 on:
   schedule:
-    - cron: '0 12 * * 1'       # 每周一中午自动检查
-  workflow_dispatch:             # 也可以手动触发
+    - cron: '0 12 * * 1'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -23,7 +22,9 @@ jobs:
           targets: armv7-unknown-linux-gnueabihf
 
       - name: Install cross-compiler
-        run: sudo apt-get update && sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
 
       - name: Configure linker
         run: |
@@ -33,6 +34,11 @@ jobs:
           linker = "arm-linux-gnueabihf-gcc"
           EOF
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -40,7 +46,7 @@ jobs:
             src/target
             ~/.cargo/registry
             ~/.cargo/git
-          key: armv7-${{ github.run_number }}
+          key: armv7-cargo-${{ hashFiles('src/Cargo.lock') }}
 
       - name: Build binary
         working-directory: src
@@ -51,7 +57,9 @@ jobs:
       - name: Build web dashboard
         working-directory: src
         run: |
-          cd web && npm ci && npm run build
+          cd web
+          npm ci
+          npm run build
 
       - name: Package
         run: |
