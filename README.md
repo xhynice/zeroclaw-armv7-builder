@@ -17,28 +17,45 @@ schema-export    # 配置 API 的 JSON Schema 导出
 ```
 
 **与官方的区别：**
-- armv7 使用 `--no-default-features` 跳过不兼容的 `observability-prometheus`（与官方 release 一致）
+- armv7 使用 `--no-default-features` 跳过 `tui-onboarding acp-bridge`
 - 额外加入 `gateway`（官方 armv7 构建没有 gateway，我们加上了）
 
-**包含的 features：**
-- `agent-runtime` — 完整 agent 运行时
-- `gateway` — Web Dashboard（官方 armv7 构建没有，我们额外加的）
-- `schema-export` — 配置 JSON Schema 导出
-
 **不包含：**
-- `observability-prometheus` — 需要 64 位原子操作，官方也跳过
 - `acp-bridge` — IDE 集成，服务器上不需要
 - `tui-onboarding` — 终端 TUI 向导
 
-## 使用方法
+## 快速安装
+
+### 一键安装（从 GitHub Release 下载）
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/xhynice/zeroclaw-armv7-builder/main/install.sh)
+```
+
+### 使用本地文件安装
+
+如果已经下载了 `zeroclaw-armv7-latest.tar.gz`：
+
+```bash
+bash install.sh zeroclaw-armv7-latest.tar.gz
+```
+
+### 安装脚本会自动处理
+
+- **首次安装** — 下载、解压、安装二进制 + Web Dashboard
+- **更新安装** — 检测已安装版本、停止运行中的服务、覆盖安装、自动重启服务
+- 显示版本变化（如 `v0.7.4 -> v0.7.5`）
+
+## 手动部署
 
 ### 1. 下载编译产物
 
-去 [Actions](../../actions) 页面，选择最新的成功构建，下载 `zeroclaw-armv7` artifact。
+去 [Releases](../../releases) 页面下载最新的 `zeroclaw-armv7-latest.tar.gz`。
 
 解压后包含：
 - `zeroclaw` — armv7 二进制
 - `web-dist/` — Web Dashboard 前端文件
+- `CHANGELOG-EN-*.md` / `CHANGELOG-ZH-*.md` — 上游更新日志
 
 ### 2. 部署到 armv7 设备
 
@@ -74,9 +91,13 @@ journalctl --user -u zeroclaw -f | grep -i "gateway\|dashboard\|listen"
 
 浏览器打开 `http://设备IP:端口` 即可使用 Web Dashboard。
 
-## 自动更新
+## 自动更新机制
 
-本仓库配置了每周一自动检查上游新版本（`schedule: cron '0 12 * * 1'`）。
+本仓库每天自动检查上游是否有新 Release（`schedule: cron '0 12 * * *'`），有新版本才构建，没有则跳过。
+
+- 保留最新 **10 个 Release**，旧的自动清理
+- 每次构建生成中英文更新日志（CHANGELOG），打包进产物
+- Release 标签带版本号（如 `v0.7.5`）
 
 你也可以手动触发：
 1. 去 [Actions](../../actions) 页面
@@ -86,9 +107,12 @@ journalctl --user -u zeroclaw -f | grep -i "gateway\|dashboard\|listen"
 ## 更新设备上的 ZeroClaw
 
 ```bash
-# 下载新版本 artifact，然后：
-scp zeroclaw root@设备IP:/usr/local/bin/
-ssh root@设备IP "zeroclaw service restart"
+# 方法 1：一键更新
+bash <(curl -fsSL https://raw.githubusercontent.com/xhynice/zeroclaw-armv7-builder/main/install.sh)
+
+# 方法 2：手动更新
+# 下载新版本 tar.gz 后
+bash install.sh zeroclaw-armv7-latest.tar.gz
 ```
 
 ## 自定义
@@ -98,7 +122,7 @@ ssh root@设备IP "zeroclaw service restart"
 编辑 `.github/workflows/build-armv7.yml`，修改 `--features` 参数：
 
 ```yaml
-- name: Build binary
+- name: Build release
   run: |
     cargo build --release --target armv7-unknown-linux-gnueabihf \
       --no-default-features --features agent-runtime,gateway,schema-export,channel-telegram
@@ -113,35 +137,29 @@ ssh root@设备IP "zeroclaw service restart"
 ```yaml
 on:
   schedule:
-    - cron: '0 12 * * *'   # 每天中午检查
-    # - cron: '0 12 * * 1' # 每周一
-    # - cron: '0 0 1 * *'  # 每月一号
+    - cron: '0 12 * * *'  # 每天中午检查（默认）
+    # - cron: '0 12 * * 1'  # 每周一
+    # - cron: '0 0 1 * *'   # 每月一号
 ```
 
 ## 编译流程
 
-参考官方 [release-stable-manual.yml](https://github.com/zeroclaw-labs/zeroclaw/blob/master/.github/workflows/release-stable-manual.yml)，分两个阶段：
+参考官方 [release-stable-manual.yml](https://github.com/zeroclaw-labs/zeroclaw/blob/master/.github/workflows/release-stable-manual.yml)，分三个阶段：
 
 ```
-Job 1: web                    Job 2: build
-┌─────────────────────┐      ┌──────────────────────────────┐
-│ cargo web build       │      │ --no-default-features        │
-│ (OpenAPI spec gen    │ ──→  │ --features agent-runtime,    │
-│  + TypeScript gen    │      │   gateway,schema-export      │
-│  + npm ci + vite)    │      │ --target armv7               │
-└─────────────────────┘      └──────────────────────────────┘
-     生成 web/dist/              生成 zeroclaw 二进制
-              ↓                          ↓
-              └──────── 打包 ────────────┘
-                    zeroclaw-armv7-latest.tar.gz
+Job 1: web            Job 2: build                Job 3: release
+┌─────────────────┐   ┌──────────────────────┐    ┌──────────────────┐
+│ cargo web build │   │ --no-default-features│    │ 清理旧 Release   │
+│ (OpenAPI spec   │   │ --features           │    │ (保留最新 10 个) │
+│  + TypeScript   │──→│  agent-runtime,      │──→ │                  │
+│  + npm + vite)  │   │  gateway,            │    │ 发布到 GitHub    │
+│                 │   │  schema-export       │    │ Releases         │
+└─────────────────┘   │ --target armv7       │    └──────────────────┘
+ 生成 web/dist/       └──────────────────────┘
+                       生成 zeroclaw 二进制 + CHANGELOG
 ```
 
-**与官方 armv7 构建的对比：**
-
-官方用 `--no-default-features --features agent-runtime,schema-export`（没有 gateway）。
-我们在官方基础上额外加了 `gateway`，其余完全一致。
-
-**为什么要用 `cargo web build` 而不是 `npm run build`：**
+**为什么用 `cargo web build` 而不是 `npm run build`：**
 
 `cargo web build` 是 ZeroClaw 的 xtask 包装器，它会：
 1. 渲染 gateway 的 OpenAPI 3.1 spec
@@ -152,7 +170,7 @@ Job 1: web                    Job 2: build
 
 ## 编译环境
 
-- **Runner:** ubuntu-latest (GitHub Actions)
+- **Runner:** ubuntu-22.04 (GitHub Actions)
 - **Rust:** 1.93.0 (pinned，与官方一致)
 - **缓存:** Swatinem/rust-cache (与官方一致)
 - **交叉编译器:** arm-linux-gnueabihf-gcc
