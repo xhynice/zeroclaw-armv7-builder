@@ -120,9 +120,9 @@ jobs:
           cp -r src/web/dist dist/web-dist
           cd dist && tar czf ../zeroclaw-armv7-latest.tar.gz zeroclaw web-dist/
 
-      - name: Upload artifact
+      - name: Upload tar.gz directly
         uses: actions/upload-artifact@v4
         with:
-          name: zeroclaw-armv7
+          name: zeroclaw-armv7-latest.tar.gz
           path: zeroclaw-armv7-latest.tar.gz
           retention-days: 30
