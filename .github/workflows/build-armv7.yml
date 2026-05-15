@@ -16,7 +16,7 @@ jobs:
   # ── 第一阶段：构建 Web Dashboard ──
   web:
     name: Build Web Dashboard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - name: Checkout builder repo
