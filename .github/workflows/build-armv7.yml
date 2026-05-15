@@ -6,16 +6,62 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # ── 检查上游是否有新版本 ──
+  check:
+    name: Check upstream release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      has_update: ${{ steps.compare.outputs.has_update }}
+      upstream_version: ${{ steps.compare.outputs.upstream_version }}
+      upstream_sha: ${{ steps.compare.outputs.upstream_sha }}
+    steps:
+      - name: Check upstream latest release
+        id: compare
+        run: |
+          # 获取上游最新 release tag
+          UPSTREAM_TAG=$(curl -fsSL "https://api.github.com/repos/zeroclaw-labs/zeroclaw/releases/latest" \
+            | grep -oP '"tag_name":\s*"\K[^"]+' || echo "")
+
+          if [ -z "$UPSTREAM_TAG" ]; then
+            # 没有 release，fallback 到最新 commit
+            UPSTREAM_SHA=$(curl -fsSL "https://api.github.com/repos/zeroclaw-labs/zeroclaw/commits?per_page=1" \
+              | grep -oP '"sha":\s*"\K[^"]+' | head -1 | cut -c1-7)
+            UPSTREAM_VERSION="commit"
+          else
+            UPSTREAM_VERSION="${UPSTREAM_TAG#v}"
+            UPSTREAM_SHA=""
+          fi
+
+          echo "upstream_version=$UPSTREAM_VERSION" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+
+          # 获取我们仓库最新 release tag
+          OUR_TAG=$(curl -fsSL "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
+            | grep -oP '"tag_name":\s*"\K[^"]+' || echo "")
+
+          OUR_VERSION="${OUR_TAG#v}"
+
+          if [ "$UPSTREAM_VERSION" = "$OUR_VERSION" ]; then
+            echo "has_update=false" >> "$GITHUB_OUTPUT"
+            echo "上游版本 $UPSTREAM_VERSION 与已构建版本相同，跳过"
+          else
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
+            echo "发现新版本: $OUR_VERSION -> $UPSTREAM_VERSION"
+          fi
+
   # ── 第一阶段：构建 Web Dashboard ──
   web:
     name: Build Web Dashboard
+    needs: [check]
+    if: needs.check.outputs.has_update == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -55,9 +101,13 @@ jobs:
   # ── 第二阶段：交叉编译 armv7 二进制 ──
   build:
     name: Build armv7 binary
-    needs: [web]
+    needs: [check, web]
+    if: needs.check.outputs.has_update == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 60
+    outputs:
+      version: ${{ steps.info.outputs.version }}
+      sha: ${{ steps.info.outputs.sha }}
     steps:
       - name: Checkout builder repo
         uses: actions/checkout@v4
@@ -72,20 +122,24 @@ jobs:
           echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           echo "version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"$$.*$$".*/\1/')" >> "$GITHUB_OUTPUT"
 
-      - name: Collect upstream commits since last build
+      - name: Collect upstream commits since last release
         id: commits
         working-directory: src
         run: |
-          LAST_RUN=$(gh run list --repo ${{ github.repository }} --workflow="${{ github.workflow }}" --status=success --limit 2 --json createdAt --jq '.[1].createdAt' 2>/dev/null || echo "")
+          LAST_RELEASE=$(gh release list --repo ${{ github.repository }} --limit 1 --json createdAt --jq '.[0].createdAt' 2>/dev/null || echo "")
 
-          if [ -z "$LAST_RUN" ] || [ "$LAST_RUN" = "null" ]; then
-            SINCE=$(date -d '7 days ago' '+%Y-%m-%d')
+          if [ -z "$LAST_RELEASE" ] || [ "$LAST_RELEASE" = "null" ]; then
+            SINCE=$(date -d '30 days ago' '+%Y-%m-%d')
           else
-            SINCE=$(date -d "$LAST_RUN" '+%Y-%m-%d')
+            SINCE=$(date -d "$LAST_RELEASE" '+%Y-%m-%d')
           fi
 
           TODAY=$(date '+%Y-%m-%d')
           COMMITS=$(git log --since="$SINCE" --pretty=format:'%h|%s|%an|%ad' --date=short --no-merges | head -30)
+
+          if [ -z "$COMMITS" ]; then
+            COMMITS=$(git log --pretty=format:'%h|%s|%an|%ad' --date=short --no-merges | head -10)
+          fi
 
           if [ -z "$COMMITS" ]; then
             echo "has_commits=false" >> "$GITHUB_OUTPUT"
@@ -220,4 +274,52 @@ jobs:
         with:
           name: zeroclaw-armv7
           path: zeroclaw-armv7-latest.tar.gz
-          retention-days: 30
+          retention-days: 7
+
+  # ── 第三阶段：发布 Release ──
+  release:
+    name: Publish Release
+    needs: [check, build]
+    if: needs.check.outputs.has_update == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Clean up old releases (keep latest 10)
+        run: |
+          gh release list --repo ${{ github.repository }} --limit 200 --json tagName,publishedAt \
+            --jq 'sort_by(.publishedAt) | reverse | .[10:] | .[].tagName' \
+          | while read -r tag; do
+              echo "Deleting old release: $tag"
+              gh release delete "$tag" --repo ${{ github.repository }} --yes --cleanup-tag
+            done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zeroclaw-armv7
+          path: dist/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.build.outputs.version }}
+          name: "ZeroClaw armv7 v${{ needs.build.outputs.version }} (${{ needs.build.outputs.sha }})"
+          body: |
+            ## ZeroClaw armv7 构建
+
+            **上游版本:** v${{ needs.build.outputs.version }}
+            **上游 Commit:** ${{ needs.build.outputs.sha }}
+            **Features:** `agent-runtime, gateway, observability-prometheus, schema-export`
+
+            ### 安装
+
+            ```bash
+            bash <(curl -fsSL https://raw.githubusercontent.com/xhynice/zeroclaw-armv7-builder/main/install.sh)
+            ```
+          files: dist/zeroclaw-armv7-latest.tar.gz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
