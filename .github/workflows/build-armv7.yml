@@ -2,7 +2,7 @@ name: Build ZeroClaw armv7
 
 on:
   schedule:
-    - cron: '0 12 * * 1'
+    - cron: '0 12 * * *'
   workflow_dispatch:
 
 permissions:
@@ -43,10 +43,6 @@ jobs:
 
       - name: Build web dashboard (cargo web build)
         working-directory: src
-        # cargo web build 做了 3 件事：
-        # 1. 渲染 gateway 的 OpenAPI 3.1 spec
-        # 2. 运行 openapi-typescript 生成 web/src/lib/api-generated.ts
-        # 3. npm ci + npm run build (tsc + vite)
         run: cargo web build
 
       - name: Upload web dist
@@ -68,6 +64,104 @@ jobs:
 
       - name: Clone upstream ZeroClaw
         run: git clone --depth 1 https://github.com/zeroclaw-labs/zeroclaw.git src
+
+      - name: Capture upstream info
+        id: info
+        working-directory: src
+        run: |
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"$$.*$$".*/\1/')" >> "$GITHUB_OUTPUT"
+
+      - name: Collect upstream commits since last build
+        id: commits
+        working-directory: src
+        run: |
+          LAST_RUN=$(gh run list --repo ${{ github.repository }} --workflow="${{ github.workflow }}" --status=success --limit 2 --json createdAt --jq '.[1].createdAt' 2>/dev/null || echo "")
+
+          if [ -z "$LAST_RUN" ] || [ "$LAST_RUN" = "null" ]; then
+            SINCE=$(date -d '7 days ago' '+%Y-%m-%d')
+          else
+            SINCE=$(date -d "$LAST_RUN" '+%Y-%m-%d')
+          fi
+
+          TODAY=$(date '+%Y-%m-%d')
+          COMMITS=$(git log --since="$SINCE" --pretty=format:'%h|%s|%an|%ad' --date=short --no-merges | head -30)
+
+          if [ -z "$COMMITS" ]; then
+            echo "has_commits=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "has_commits=true" >> "$GITHUB_OUTPUT"
+
+          # 英文版
+          {
+            echo "# ZeroClaw 上游更新日志"
+            echo ""
+            echo "**构建版本:** v${{ steps.info.outputs.version }} (${{ steps.info.outputs.sha }})"
+            echo "**构建日期:** $TODAY"
+            echo "**更新范围:** $SINCE 至今"
+            echo ""
+            echo "---"
+            echo ""
+            echo "| 提交 | 说明 | 作者 | 日期 |"
+            echo "|------|------|------|------|"
+            echo "$COMMITS" | while IFS='|' read -r hash msg author date; do
+              echo "| \`$hash\` | $msg | $author | $date |"
+            done
+          } > "CHANGELOG-EN-${TODAY}.md"
+
+          # 中文版
+          {
+            echo "# ZeroClaw 上游更新日志"
+            echo ""
+            echo "**构建版本:** v${{ steps.info.outputs.version }} (${{ steps.info.outputs.sha }})"
+            echo "**构建日期:** $TODAY"
+            echo "**更新范围:** $SINCE 至今"
+            echo ""
+            echo "---"
+            echo ""
+            echo "| 提交 | 说明 | 作者 | 日期 |"
+            echo "|------|------|------|------|"
+            echo "$COMMITS" | while IFS='|' read -r hash msg author date; do
+              zh_msg="$msg"
+              zh_msg=$(echo "$zh_msg" | sed \
+                -e 's/^feat:/功能:/' \
+                -e 's/^fix:/修复:/' \
+                -e 's/^docs:/文档:/' \
+                -e 's/^style:/样式:/' \
+                -e 's/^refactor:/重构:/' \
+                -e 's/^perf:/性能:/' \
+                -e 's/^test:/测试:/' \
+                -e 's/^chore:/杂项:/' \
+                -e 's/^ci:/持续集成:/' \
+                -e 's/^build:/构建:/' \
+                -e 's/^revert:/回滚:/' \
+                -e 's/^add/新增/' \
+                -e 's/^remove/移除/' \
+                -e 's/^update/更新/' \
+                -e 's/^delete/删除/' \
+                -e 's/^fix/修复/' \
+                -e 's/^support/支持/' \
+                -e 's/^implement/实现/' \
+                -e 's/^improve/改进/' \
+                -e 's/^optimize/优化/' \
+                -e 's/^refactor/重构/' \
+                -e 's/^rename/重命名/' \
+                -e 's/^move/移动/' \
+                -e 's/^merge/合并/' \
+                -e 's/^bump/升级/' \
+                -e 's/^release/发布/' \
+                -e 's/^initial/初始化/' \
+                -e 's/^deprecated/废弃/' \
+                -e 's/^breaking/破坏性变更:/' \
+                -e 's/^dependencies/依赖/' \
+                -e 's/^devDependencies/开发依赖/')
+              echo "| \`$hash\` | $zh_msg | $author | $date |"
+            done
+          } > "CHANGELOG-ZH-${TODAY}.md"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -92,7 +186,6 @@ jobs:
           [target.armv7-unknown-linux-gnueabihf]
           linker = "arm-linux-gnueabihf-gcc"
           EOF
-          sed -i 's/^          //' src/.cargo/config.toml
 
       - name: Download web dashboard
         uses: actions/download-artifact@v4
@@ -105,24 +198,26 @@ jobs:
         env:
           CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
         run: |
-          # 参考官方 release workflow: armv7 用 --no-default-features 跳过 prometheus
-          # 官方: agent-runtime,schema-export,channel-matrix,channel-lark,whatsapp-web
-          # 我们额外加 gateway (WebUI)
-          cargo build --release --locked --target armv7-unknown-linux-gnueabihf
-          #cargo build --release --locked --no-default-features \
-          #  --features "agent-runtime,gateway,schema-export" \
-          #  --target armv7-unknown-linux-gnueabihf
+          cargo build --release --no-default-features \
+            --features agent-runtime,gateway,observability-prometheus,schema-export \
+            --target armv7-unknown-linux-gnueabihf
 
       - name: Package
         run: |
+          TODAY=$(date '+%Y-%m-%d')
           mkdir -p dist
           cp src/target/armv7-unknown-linux-gnueabihf/release/zeroclaw dist/
           cp -r src/web/dist dist/web-dist
-          cd dist && tar czf ../zeroclaw-armv7-latest.tar.gz zeroclaw web-dist/
 
-      - name: Upload tar.gz directly
+          if [ "${{ steps.commits.outputs.has_commits }}" = "true" ]; then
+            cp "CHANGELOG-EN-${TODAY}.md" "CHANGELOG-ZH-${TODAY}.md" dist/
+          fi
+
+          cd dist && tar czf ../zeroclaw-armv7-latest.tar.gz .
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zeroclaw-armv7-latest.tar.gz
+          name: zeroclaw-armv7
           path: zeroclaw-armv7-latest.tar.gz
           retention-days: 30
