@@ -4,7 +4,7 @@
 
 ## 为什么需要这个
 
-ZeroClaw 的官方预编译包虽然有 `armv7-unknown-linux-gnueabihf` 版本，但它是 minimal 构建，**不包含 gateway（WebUI）**。而从源码编译时，install.sh 对 32 位 ARM 有硬拦截（因为 `observability-prometheus` 需要 64 位原子操作），无法直接编译带 gateway 的版本。
+ZeroClaw 的官方预编译包虽然有 `armv7-unknown-linux-gnueabihf` 版本，但它是 minimal 构建，**不包含 gateway（WebUI）**。而从源码编译时，install.sh 对 32 位 ARM 有硬拦截。
 
 本仓库通过 GitHub Actions 交叉编译，跳过 prometheus，保留完整的 agent 运行时 + WebUI。
 
