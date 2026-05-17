@@ -10,13 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4  # 升级到 v4
         with:
           repository: facebookresearch/faiss
           ref: v1.13.2  # 指定版本
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3  # 升级到 v3
         with:
           platforms: arm
 
@@ -33,7 +33,8 @@ jobs:
             "
 
       - name: Upload wheel artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4  # 升级到 v4
         with:
           name: faiss-cpu-armhf-wheel
           path: faiss/faiss/python/dist/*.whl
+          retention-days: 7  # 保留7天
