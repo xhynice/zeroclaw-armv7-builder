@@ -24,7 +24,7 @@ jobs:
         run: |
           docker run --rm -v $PWD:/workspace -w /workspace \
             --platform linux/arm/v7 \
-            python:3.12-slim \
+            python:3.12 \
             bash -c "
               apt-get update && \
               apt-get install -y swig build-essential gfortran libopenblas-dev cmake git python3-dev && \
