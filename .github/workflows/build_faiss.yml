@@ -10,13 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4  # 升级到 v4
+        uses: actions/checkout@v4
         with:
           repository: facebookresearch/faiss
-          ref: v1.13.2  # 指定版本
+          ref: v1.13.2  # 使用更稳定的版本
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3  # 升级到 v3
+        uses: docker/setup-qemu-action@v3
         with:
           platforms: arm
 
@@ -27,14 +27,15 @@ jobs:
             python:3.12 \
             bash -c "
               apt-get update && \
-              apt-get install -y swig build-essential gfortran libopenblas-dev cmake git python3-dev && \
+              apt-get install -y swig build-essential gfortran libopenblas-dev cmake git python3-dev python3-pip && \
+              python3 -m pip install --upgrade pip setuptools wheel && \
               cd faiss/python && \
-              python setup.py bdist_wheel
+              python3 setup.py bdist_wheel
             "
 
       - name: Upload wheel artifact
-        uses: actions/upload-artifact@v4  # 升级到 v4
+        uses: actions/upload-artifact@v4
         with:
           name: faiss-cpu-armhf-wheel
           path: faiss/faiss/python/dist/*.whl
-          retention-days: 7  # 保留7天
+          retention-days: 7
