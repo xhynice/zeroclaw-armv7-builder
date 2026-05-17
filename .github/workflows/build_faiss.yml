@@ -30,6 +30,13 @@ jobs:
               cd faiss && \
               git checkout v1.13.2 && \
               git submodule update --init --recursive && \
+              # 检查 contrib 目录是否存在
+              ls -la && \
+              ls -la contrib/ && \
+              # 如果 contrib 在根目录，复制到 python 目录
+              if [ -d \"contrib\" ]; then \
+                cp -r contrib faiss/python/; \
+              fi && \
               cd faiss/python && \
               python3 setup.py bdist_wheel
             "
