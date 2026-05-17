@@ -1,0 +1,39 @@
+name: Build faiss-cpu for armhf
+
+on:
+  workflow_dispatch:  # 手动触发
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          repository: facebookresearch/faiss
+          ref: v1.13.2  # 指定版本
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: arm
+
+      - name: Build faiss-cpu wheel
+        run: |
+          docker run --rm -v $PWD:/workspace -w /workspace \
+            --platform linux/arm/v7 \
+            python:3.12-slim \
+            bash -c "
+              apt-get update && \
+              apt-get install -y swig build-essential gfortran libopenblas-dev cmake git python3-dev && \
+              cd faiss/python && \
+              python setup.py bdist_wheel
+            "
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: faiss-cpu-armhf-wheel
+          path: faiss/faiss/python/dist/*.whl
