@@ -1,4 +1,4 @@
-name: Build faiss-cpu for armhf (v1.13.2 - 完整编译)
+name: Build faiss-cpu for armhf (v1.13.2 using faiss-wheels)
 
 on:
   workflow_dispatch:  # 手动触发
@@ -17,7 +17,7 @@ jobs:
         with:
           platforms: arm
 
-      - name: Build faiss C++ library and Python bindings
+      - name: Build using faiss-wheels
         run: |
           docker run --rm -v $PWD:/workspace -w /workspace \
             --platform linux/arm/v7 \
@@ -25,23 +25,16 @@ jobs:
             bash -c "
               apt-get update && \
               apt-get install -y swig build-essential gfortran libopenblas-dev cmake git python3-dev python3-pip && \
-              python3 -m pip install --upgrade pip setuptools wheel && \
-              git clone https://github.com/facebookresearch/faiss.git && \
-              cd faiss && \
-              git checkout v1.13.2 && \
-              git submodule update --init --recursive && \
-              # 编译 C++ 库
-              cmake -B build -DBUILD_SHARED_LIBS=ON -DFAISS_ENABLE_GPU=OFF -DFAISS_OPT_LEVEL=generic . && \
-              make -C build -j$(nproc) && \
-              # 编译 Python 绑定
-              cd faiss/python && \
-              python3 setup.py build_ext --inplace && \
-              python3 setup.py bdist_wheel
+              python3 -m pip install scikit-build-core build && \
+              git clone https://github.com/kyamagu/faiss-wheels.git && \
+              cd faiss-wheels && \
+              export FAISS_VERSION=1.13.2 && \
+              python3 -m build --wheel
             "
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
           name: faiss-cpu-armhf-wheel-v1.13.2
-          path: faiss/faiss/python/dist/*.whl
+          path: faiss-wheels/dist/*.whl
           retention-days: 7
