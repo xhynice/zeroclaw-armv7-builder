@@ -6,23 +6,22 @@
 
 ZeroClaw 的官方预编译包虽然有 `armv7-unknown-linux-gnueabihf` 版本，但它是 minimal 构建，**不包含 gateway（WebUI）**。而从源码编译时，install.sh 对 32 位 ARM 有硬拦截。
 
-本仓库通过 GitHub Actions 交叉编译，跳过 prometheus，保留完整的 agent 运行时 + WebUI。
+本仓库通过 GitHub Actions 交叉编译，保留完整的 agent 运行时 + WebUI，仅去掉终端 TUI 安装向导。
 
 ## 编译的 features
 
 ```
-agent-runtime    # 完整 agent 运行时（agent 循环、安全策略、SOP、cron、25+ 聊天渠道）
-gateway          # HTTP/WebSocket 服务器 + Web Dashboard
-schema-export    # 配置 API 的 JSON Schema 导出
+agent-runtime              # 完整 agent 运行时（agent 循环、安全策略、SOP、cron、25+ 聊天渠道）
+gateway                    # HTTP/WebSocket 服务器 + Web Dashboard
+observability-prometheus   # Prometheus 监控指标
+schema-export              # 配置 API 的 JSON Schema 导出
 ```
 
 **与官方的区别：**
-- armv7 使用 `--no-default-features` 跳过 `tui-onboarding acp-bridge`
-- 额外加入 `gateway`（官方 armv7 构建没有 gateway，我们加上了）
+- 使用 `--no-default-features` 跳过 `tui-onboarding`（终端 TUI 安装向导，armv7 设备上不需要）
 
 **不包含：**
-- `acp-bridge` — IDE 集成，服务器上不需要
-- `tui-onboarding` — 终端 TUI 向导
+- `tui-onboarding` — 终端 TUI 安装向导
 
 ## 快速安装
 
@@ -93,7 +92,7 @@ journalctl --user -u zeroclaw -f | grep -i "gateway\|dashboard\|listen"
 
 ## 自动更新机制
 
-本仓库每天自动检查上游是否有新 Release（`schedule: cron '0 12 * * *'`），有新版本才构建，没有则跳过。
+本仓库每天自动构建（`schedule: cron '0 12 * * *'`），每次运行都会拉取上游最新代码。
 
 - 保留最新 **10 个 Release**，旧的自动清理
 - 每次构建生成中英文更新日志（CHANGELOG），打包进产物
@@ -170,7 +169,7 @@ Job 1: web            Job 2: build                Job 3: release
 
 ## 编译环境
 
-- **Runner:** ubuntu-22.04 (GitHub Actions)
+- **Runner:** ubuntu-latest (GitHub Actions)
 - **Rust:** 1.93.0 (pinned，与官方一致)
 - **缓存:** Swatinem/rust-cache (与官方一致)
 - **交叉编译器:** arm-linux-gnueabihf-gcc
