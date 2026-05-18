@@ -1,101 +1,88 @@
-name: Build faiss-cpu ARMv7 (cross-compile)
+name: Build faiss ARMv7 (pure cross)
 
 on:
   workflow_dispatch:
 
 jobs:
-  cross-build:
+  build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 30  # 交叉编译在 x86 上跑，快很多
+    timeout-minutes: 45
 
     steps:
-      - name: Install cross-compile toolchain & deps
+      - name: Setup
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            gcc-arm-linux-gnueabihf \
-            g++-arm-linux-gnueabihf \
+            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
             gfortran-arm-linux-gnueabihf \
-            cmake swig git wget \
-            libopenblas-dev:armhf \
-            liblapack-dev:armhf \
-            python3-dev python3-pip python3-venv \
-            qemu-user-static
+            cmake swig git make python3-pip
+          pip3 install wheel setuptools numpy
 
-          pip3 install --upgrade pip setuptools wheel numpy
+      - name: Build OpenBLAS
+        run: |
+          git clone --depth 1 --branch v0.3.25 https://github.com/OpenMathLib/OpenBLAS.git
+          cd OpenBLAS
+          make -j$(nproc) \
+            CC=arm-linux-gnueabihf-gcc FC=arm-linux-gnueabihf-gfortran \
+            HOSTCC=gcc TARGET=ARMV7 NO_SHARED=1 USE_THREAD=0
+          make install PREFIX=$GITHUB_WORKSPACE/openblas NO_SHARED=1
 
-      - name: Cross-compile faiss for ARMv7
+      - name: Build faiss C++
         run: |
           git clone --depth 1 --branch v1.8.0 https://github.com/facebookresearch/faiss.git
           cd faiss
 
-          # 创建 CMake 交叉编译工具链文件
-          cat > armv7-toolchain.cmake << 'EOF'
+          cat > armv7.cmake << EOF
           set(CMAKE_SYSTEM_NAME Linux)
-          set(CMAKE_SYSTEM_PROCESSOR arm)
-
+          set(CMAKE_SYSTEM_PROCESSOR armv7l)
           set(CMAKE_C_COMPILER arm-linux-gnueabihf-gcc)
           set(CMAKE_CXX_COMPILER arm-linux-gnueabihf-g++)
-          set(CMAKE_Fortran_COMPILER arm-linux-gnueabihf-gfortran)
-
-          set(CMAKE_FIND_ROOT_PATH /usr/arm-linux-gnueabihf)
-          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-
-          # BLAS/LAPACK 路径
-          set(BLAS_LIBRARIES /usr/lib/arm-linux-gnueabihf/libopenblas.so)
-          set(LAPACK_LIBRARIES /usr/lib/arm-linux-gnueabihf/liblapack.so)
           EOF
 
-          # 交叉编译 C++ 库
           cmake -B build . \
-            -DCMAKE_TOOLCHAIN_FILE=armv7-toolchain.cmake \
+            -DCMAKE_TOOLCHAIN_FILE=armv7.cmake \
             -DFAISS_ENABLE_GPU=OFF \
             -DFAISS_ENABLE_PYTHON=OFF \
             -DBUILD_TESTING=OFF \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DFAISS_OPT_LEVEL=generic \
-            -DPython_EXECUTABLE=/usr/bin/python3
+            -DBLA_VENDOR=OpenBLAS \
+            -DBLAS_INCLUDE_DIRS=$GITHUB_WORKSPACE/openblas/include \
+            -DBLAS_LIBRARIES="$GITHUB_WORKSPACE/openblas/lib/libopenblas.a;-lpthread;-lgfortran" \
+            -DLAPACK_LIBRARIES="$GITHUB_WORKSPACE/openblas/lib/libopenblas.a;-lpthread;-lgfortran"
 
           cmake --build build -j$(nproc)
 
-          echo "=== C++ 编译完成 ==="
-          ls -la build/faiss/
-
-      - name: Build Python wheel
+      - name: Build Python binding via QEMU (lightweight)
         run: |
-          cd faiss
+          sudo apt-get install -y qemu-user-static
 
-          # Python 绑定部分需要目标架构的 Python
-          # 用 QEMU 只跑 Python 打包步骤（这步很快）
-          # 先把编译好的库打包
-
-          cd build/faiss/python
-
-          # 创建 wheel 手工打包
-          python3 setup.py bdist_wheel 2>/dev/null || true
-
-          # 如果 setup.py 不行，手动打包
-          mkdir -p dist
-          echo "尝试 cibuildwheel..."
-
-      - name: Alternative - use cibuildwheel
-        run: |
-          pip3 install cibuildwheel
-
-          cd faiss
-          # cibuildwheel 自动处理交叉编译 + wheel 打包
-          CIBW_ARCHS=armv7l \
-          CIBW_BUILD="cp312-*" \
-          CIBW_MANYLINUX_IMAGE="arm32v7/ubuntu:22.04" \
-          CIBW_BEFORE_BUILD="apt-get update && apt-get install -y cmake g++ gfortran libopenblas-dev liblapack-dev swig" \
-          CIBW_TEST_COMMAND="python -c 'import faiss; print(faiss.__version__)'" \
-          cibuildwheel --platform linux --output-dir output/
+          # 只用 QEMU 做 Python 打包，C++ 不走 QEMU
+          docker run --rm --platform linux/arm/v7 \
+            -v $GITHUB_WORKSPACE/faiss:/faiss \
+            -v $GITHUB_WORKSPACE/openblas:/openblas \
+            arm32v7/ubuntu:22.04 \
+            bash -c '
+            apt-get update && apt-get install -y python3-dev python3-pip cmake g++ swig
+            pip3 install --break-system-packages numpy wheel setuptools
+            cd /faiss
+            cmake -B build . \
+              -DFAISS_ENABLE_GPU=OFF -DFAISS_ENABLE_PYTHON=ON \
+              -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF \
+              -DCMAKE_BUILD_TYPE=Release -DFAISS_OPT_LEVEL=generic \
+              -DBLAS_INCLUDE_DIRS=/openblas/include \
+              -DBLAS_LIBRARIES="/openblas/lib/libopenblas.a" \
+              -DLAPACK_LIBRARIES="/openblas/lib/libopenblas.a"
+            cmake --build build --target faiss_python -j2
+            cd build/faiss/python && python3 setup.py bdist_wheel
+            cp dist/*.whl /faiss/
+            pip3 install /faiss/*.whl
+            python3 -c "import faiss; print(faiss.__version__)"
+            '
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: faiss-armv7
-          path: output/*.whl
+          name: faiss-cpu-armv7l
+          path: faiss/*.whl
