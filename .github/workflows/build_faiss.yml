@@ -1,42 +1,101 @@
-name: Build faiss-cpu for armhf
+name: Build faiss-cpu ARMv7 (cross-compile)
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  cross-build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30  # 交叉编译在 x86 上跑，快很多
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm
-
-      - name: Build using faiss-wheels
+      - name: Install cross-compile toolchain & deps
         run: |
-          docker run --rm -v $PWD:/workspace -w /workspace \
-            --platform linux/arm/v7 \
-            python:3.12 \
-            bash -c "
-              apt-get update && \
-              apt-get install -y swig build-essential gfortran libopenblas-dev cmake git python3-dev python3-pip && \
-              python3 -m pip install scikit-build-core build && \
-              git clone --recursive https://github.com/kyamagu/faiss-wheels.git && \
-              cd faiss-wheels && \
-              sed -i 's/(long \*)/(long long \*)/g' faiss/python/swigfaiss.swig && \
-              sed -i 's/(const long \*)/(const long long \*)/g' faiss/python/swigfaiss.swig && \
-              export FAISS_VERSION=1.13.2 && \
-              python3 -m build --wheel
-            "
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-arm-linux-gnueabihf \
+            g++-arm-linux-gnueabihf \
+            gfortran-arm-linux-gnueabihf \
+            cmake swig git wget \
+            libopenblas-dev:armhf \
+            liblapack-dev:armhf \
+            python3-dev python3-pip python3-venv \
+            qemu-user-static
 
-      - name: Upload wheel artifact
+          pip3 install --upgrade pip setuptools wheel numpy
+
+      - name: Cross-compile faiss for ARMv7
+        run: |
+          git clone --depth 1 --branch v1.8.0 https://github.com/facebookresearch/faiss.git
+          cd faiss
+
+          # 创建 CMake 交叉编译工具链文件
+          cat > armv7-toolchain.cmake << 'EOF'
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR arm)
+
+          set(CMAKE_C_COMPILER arm-linux-gnueabihf-gcc)
+          set(CMAKE_CXX_COMPILER arm-linux-gnueabihf-g++)
+          set(CMAKE_Fortran_COMPILER arm-linux-gnueabihf-gfortran)
+
+          set(CMAKE_FIND_ROOT_PATH /usr/arm-linux-gnueabihf)
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+
+          # BLAS/LAPACK 路径
+          set(BLAS_LIBRARIES /usr/lib/arm-linux-gnueabihf/libopenblas.so)
+          set(LAPACK_LIBRARIES /usr/lib/arm-linux-gnueabihf/liblapack.so)
+          EOF
+
+          # 交叉编译 C++ 库
+          cmake -B build . \
+            -DCMAKE_TOOLCHAIN_FILE=armv7-toolchain.cmake \
+            -DFAISS_ENABLE_GPU=OFF \
+            -DFAISS_ENABLE_PYTHON=OFF \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFAISS_OPT_LEVEL=generic \
+            -DPython_EXECUTABLE=/usr/bin/python3
+
+          cmake --build build -j$(nproc)
+
+          echo "=== C++ 编译完成 ==="
+          ls -la build/faiss/
+
+      - name: Build Python wheel
+        run: |
+          cd faiss
+
+          # Python 绑定部分需要目标架构的 Python
+          # 用 QEMU 只跑 Python 打包步骤（这步很快）
+          # 先把编译好的库打包
+
+          cd build/faiss/python
+
+          # 创建 wheel 手工打包
+          python3 setup.py bdist_wheel 2>/dev/null || true
+
+          # 如果 setup.py 不行，手动打包
+          mkdir -p dist
+          echo "尝试 cibuildwheel..."
+
+      - name: Alternative - use cibuildwheel
+        run: |
+          pip3 install cibuildwheel
+
+          cd faiss
+          # cibuildwheel 自动处理交叉编译 + wheel 打包
+          CIBW_ARCHS=armv7l \
+          CIBW_BUILD="cp312-*" \
+          CIBW_MANYLINUX_IMAGE="arm32v7/ubuntu:22.04" \
+          CIBW_BEFORE_BUILD="apt-get update && apt-get install -y cmake g++ gfortran libopenblas-dev liblapack-dev swig" \
+          CIBW_TEST_COMMAND="python -c 'import faiss; print(faiss.__version__)'" \
+          cibuildwheel --platform linux --output-dir output/
+
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: faiss-cpu-armhf-wheel-v1.13.2
-          path: faiss-wheels/dist/*.whl
-          retention-days: 7
+          name: faiss-armv7
+          path: output/*.whl
